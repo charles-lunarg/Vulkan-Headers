@@ -8,7 +8,7 @@ import pickle
 import os
 import tempfile
 from vulkan_object import (VulkanObject,
-    Extension, Version, Deprecate, Handle, Param, Queues, CommandScope, Command,
+    Extension, Version, Deprecate, Handle, BaseType, PlatformType, FuncPointerParam, FuncPointer, Param, Queues, CommandScope, Command,
     EnumField, Enum, Flag, Bitmask, Flags, Member, Struct,
     FormatComponent, FormatPlane, Format,
     SyncSupport, SyncEquivalent, SyncStage, SyncAccess, SyncPipelineStage, SyncPipeline,
@@ -75,6 +75,7 @@ def EnableCaching() -> None:
     global cachingEnabled
     cachingEnabled = True
 
+
 # This class is a container for any source code, data, or other behavior that is necessary to
 # customize the generator script for a specific target API variant (e.g. Vulkan SC). As such,
 # all of these API-specific interfaces and their use in the generator script are part of the
@@ -133,6 +134,7 @@ class BaseGenerator(OutputGenerator):
         OutputGenerator.__init__(self, None, None, None)
         self.vk = VulkanObject()
         self.targetApiName = globalApiName
+        self.filename = None
 
         # reg.py has a `self.featureName` but this is nicer because
         # it will be either the Version or Extension object
@@ -153,6 +155,9 @@ class BaseGenerator(OutputGenerator):
         # We track all enum constants and flag bits so that we can apply their aliases in the end
         self.enumFieldMap: dict[str, EnumField] = dict()
         self.flagMap: dict[str, Flag] = dict()
+
+        self.xmlName = 'vk' # Should only ever be vk or video
+
 
     # De-aliases a definition name based on the specified alias map.
     # There are aliases of aliases.
@@ -399,16 +404,17 @@ class BaseGenerator(OutputGenerator):
                 handle.device = next_parent.name == 'VkDevice'
                 next_parent = next_parent.parent
 
-        maxSyncSupport.queues = Queues.ALL
-        maxSyncSupport.stages = self.vk.bitmasks['VkPipelineStageFlagBits2'].flags
-        maxSyncEquivalent.accesses = self.vk.bitmasks['VkAccessFlagBits2'].flags
-        maxSyncEquivalent.stages = self.vk.bitmasks['VkPipelineStageFlagBits2'].flags
+        if self.xmlName == 'vk':
+            maxSyncSupport.queues = Queues.ALL
+            maxSyncSupport.stages = self.vk.bitmasks['VkPipelineStageFlagBits2'].flags
+            maxSyncEquivalent.accesses = self.vk.bitmasks['VkAccessFlagBits2'].flags
+            maxSyncEquivalent.stages = self.vk.bitmasks['VkPipelineStageFlagBits2'].flags
 
         # All inherited generators should run from here
         self.generate()
 
         if cachingEnabled:
-            cachePath = os.path.join(tempfile.gettempdir(), f'vkobject_{os.getpid()}')
+            cachePath = os.path.join(tempfile.gettempdir(), f'vkobject_{os.getpid()}{self.xmlName}')
             if not os.path.isfile(cachePath):
                 cacheFile = open(cachePath, 'wb')
                 pickle.dump(self.vk, cacheFile)
@@ -447,9 +453,10 @@ class BaseGenerator(OutputGenerator):
             deprecatedby = interface.get('deprecatedby')
             obsoletedby = interface.get('obsoletedby')
             specialuse = splitIfGet(interface, 'specialuse')
+
             # Not sure if better way to get this info
-            specVersion = self.featureDictionary[name]['enumconstant'][None][None][0]
-            nameString = self.featureDictionary[name]['enumconstant'][None][None][1]
+            specVersion = self.featureDictionary[name]['enumconstant'][None][None][0] if 'video.xml' in self.filename else ''
+            nameString = self.featureDictionary[name]['enumconstant'][None][None][1] if 'video.xml' in self.filename else ''
 
             self.currentExtension = Extension(name, nameString, specVersion, instance, device, depends, vendorTag,
                                             platform, protect, provisional, promotedto, deprecatedby,
@@ -729,11 +736,50 @@ class BaseGenerator(OutputGenerator):
 
             self.vk.flags[typeName] = Flags(typeName, [], bitmaskName, protect, baseFlagsType, bitWidth, True, extension)
 
+        elif category == 'funcpointer':
+            requires = typeElem.get('requires')
+            paramTypes = []
+            for paramType in typeElem.findall('type'):
+                paramTypes.append(paramType)
+
+            # not much help from XML, must resort to string processing
+            text = ''
+            for node in typeElem.itertext():
+                comment = typeElem.find('comment')
+                if comment is not None and comment.text == node:
+                    continue
+                text += node
+
+            paramsTextList = text.split(')(')
+            paramsText = paramsTextList[1]
+
+            returnTypeSplit = text.split('(')
+            returnType = returnTypeSplit[0].removesuffix('typedef ')
+
+            params = []
+            # Loop if more than one param, splitting on the comma. Otherwise just add the single param
+            if ',' in paramsText:
+                for param in paramsText.split(','):
+                    paramSplit = param.split(' ')
+                    params.append(FuncPointerParam(paramSplit[-1], paramTypes[0], ' '.join(paramSplit[0:-1]), param))
+                    paramTypes.remove(paramTypes[0]) # pop the front so that the next iter gets the right type
+            elif len(paramTypes) > 0:
+                paramSplit = paramsText.split(' ')
+                params.append(FuncPointerParam(paramSplit[-1], paramTypes[0], ' '.join(paramSplit[0:-1]), paramsText))
+
+            self.vk.funcPointers[typeName] = FuncPointer(typeName, protect, returnType, requires,  params, typeElem.text)
+
+        elif category == 'basetype':
+            self.vk.baseTypes[typeName] = BaseType(typeName, '*' in typeElem.text, typeElem.text, protect)
+
+        elif category is None:
+            self.vk.platformTypes[typeName] = PlatformType(typeName, typeElem.get('requires'), protect)
+
+
         else:
             # not all categories are used
+            #   'include' are only for headers
             #   'group'/'enum' are routed to genGroup instead
-            #   'basetype'/'include' are only for headers
-            #   'funcpointer` ignore until needed
             return
 
     def genSpirv(self, spirvinfo, spirvName, alias):

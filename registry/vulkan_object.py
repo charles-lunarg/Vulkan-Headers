@@ -80,6 +80,54 @@ class Handle:
     def __lt__(self, other):
         return self.name < other.name
 
+
+@dataclass
+class BaseType:
+    """<basetype>"""
+    name: str  # ex) MTLDevice_id
+    pointer: bool # If the underlying type is a pointer type, ex) void* MTLDevice_id
+    cDeclaration: str # C string of param, ex) struct ANativeWindow;
+    protect: (str | None) # ex) 'VK_ENABLE_BETA_EXTENSIONS'
+
+@dataclass
+class FuncPointerParam:
+    """<funcpointer/param>"""
+    name: str
+
+    # the "base type" - will not preserve the 'const' or pointer info
+    # ex) void, uint32_t, VkFormat, VkBuffer, etc
+    type: str
+    # the "full type" - will be cDeclaration without the type name
+    # ex) const void*, uint32_t, const VkFormat, VkBuffer*, etc
+    fullType: str
+
+    # C string of param, ex) void* pUserData
+    cDeclaration: str
+
+@dataclass
+class PlatformType:
+    """<type> which represents a platform defined type"""
+    name: str # ex) HINSTANCE
+    requires: (str | None) # ex) "windows.h"
+    protect: (str | None) # ex) 'VK_USE_PLATFORM_WIN32_KHR'
+
+@dataclass
+class FuncPointer:
+    """<funcpointer>"""
+    name: str # ex) PFN_vkAllocationFunction
+
+    protect: (str | None) # ex) 'VK_ENABLE_BETA_EXTENSIONS'
+
+    returnType: str # ex) void, VkResult, etc
+
+    requires: (str | None) # ex VkDebugUtilsMessengerCallbackDataEXT
+
+    params: list[FuncPointerParam] # Each parameter of the command
+
+    # function pointer typedef  - ex:
+    # typedef void* (VKAPI_PTR void*PFN_vkAllocationFunction)(void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope);
+    cFunctionPointer: str
+
 @dataclass
 class Param:
     """<command/param>"""
@@ -460,6 +508,10 @@ class VulkanObject():
     bitmasks: dict[str, Bitmask]     = field(default_factory=dict, init=False)
     flags:    dict[str, Flags]       = field(default_factory=dict, init=False)
     formats:  dict[str, Format]      = field(default_factory=dict, init=False)
+
+    baseTypes:     dict[str, BaseType]     = field(default_factory=dict, init=False)
+    platformTypes: dict[str, PlatformType] = field(default_factory=dict, init=False)
+    funcPointers:  dict[str, FuncPointer]  = field(default_factory=dict, init=False)
 
     syncStage:    list[SyncStage]    = field(default_factory=list, init=False)
     syncAccess:   list[SyncAccess]   = field(default_factory=list, init=False)
